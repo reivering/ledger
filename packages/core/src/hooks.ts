@@ -28,6 +28,8 @@ export function installHooks(root: string, command: string[]): string[] {
     '#!/bin/sh',
     MARK,
     '# Records the new HEAD in the background. Never blocks or fails the git operation.',
+    '# Rebases replay already-recorded commits as new ones; record nothing until the rebase is done.',
+    '[ -d "$(git rev-parse --git-path rebase-merge)" ] || [ -d "$(git rev-parse --git-path rebase-apply)" ] && exit 0',
     'sha=$(git rev-parse HEAD 2>/dev/null) || exit 0',
     `log="$(git rev-parse --git-dir 2>/dev/null)/${BIN_NAME}-hook.log"`,
     `nohup ${command.map(shq).join(' ')} record "$sha" >>"$log" 2>&1 </dev/null &`,

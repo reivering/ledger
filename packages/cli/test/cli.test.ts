@@ -73,6 +73,25 @@ it('hooks never fail git commit/merge, even with no API key; uninstall removes t
   expect(existsSync(join(repo.dir, '.git/hooks/post-merge'))).toBe(false);
 });
 
+it('a rebase does not record replayed commits', async () => {
+  ledger('init');
+  const cfg = join(repo.dir, '.ledger/config.yaml');
+  writeFileSync(cfg, readFileSync(cfg, 'utf8').replace(/^provider: \w+/m, 'provider: fake'));
+  repo.commit('init');
+  ledger('hook', 'install');
+  repo.write('a.txt', 'a\n');
+  repo.commit('main a');
+  repo.git('checkout', '-q', '-b', 'f', 'HEAD~1');
+  for (const n of [1, 2]) {
+    repo.write(`f${n}.txt`, `${n}\n`);
+    repo.commit(`feat ${n}`);
+  }
+  await until(() => changes().length === 3);
+  repo.git('rebase', '-q', 'main');
+  await new Promise((r) => setTimeout(r, 2000)); // give any (wrongly) spawned hook runs time to write
+  expect(changes()).toHaveLength(3);
+});
+
 it('refuses to clobber a foreign hook', () => {
   ledger('init');
   writeFileSync(join(repo.dir, '.git/hooks/post-commit'), '#!/bin/sh\necho mine\n');
