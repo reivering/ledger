@@ -3,7 +3,7 @@
     "url": "https://api.github.com/repos/acme/payments/issues/7",
     "number": 7,
     "title": "Customers charged twice on retry",
-    "body": "Retries after a gateway timeout create a second charge.\n\nRepro key: REDACTED_STRIPE_KEY",
+    "body": "Retries after a gateway timeout create a second charge.\n\nRepro key: __FAKE_STRIPE_KEY__",
     "state": "closed",
     "state_reason": "completed",
     "labels": [

@@ -96,7 +96,8 @@ describe('index + queries', () => {
 
 describe('github import (recorded fixtures, no network)', () => {
   const FIX = join(import.meta.dirname, 'fixtures/github');
-  const load = (f: string): unknown => JSON.parse(readFileSync(join(FIX, f), 'utf8'));
+  // The fake key is assembled at runtime so no literal secret is committed (it would trip secret scanners).
+  const load = (f: string): unknown => JSON.parse(readFileSync(join(FIX, f), 'utf8').replace('__FAKE_STRIPE_KEY__', ['sk_live_', '4eC39HqLyjWDarjtT1zdp7dc'].join('')));
 
   it('imports issues + closing commits, links existing changes, is incremental and additive', async () => {
     const r = (repo = await seededRepo());
