@@ -2,7 +2,7 @@
 # Keys come only from the environment: LEDGER_ANTHROPIC_API_KEY, LEDGER_OPENAI_API_KEY.
 provider: openai               # K2 Horizon (IFM, OpenAI-compatible API)
 model: IFM/K2-Horizon-375B-A23B
-base_url: https://api.ifm.ai/v1    # IFM direct; the local 8787 proxy is equivalent
+base_url: http://127.0.0.1:8787/v1   # IFM proxy (k2h) -> https://api.ifm.ai
 max_diff_chars: 60000        # larger diffs are truncated; per-file summaries are always kept
 categories: [feature, bugfix, refactor, security, config, docs, chore]
 redaction:
