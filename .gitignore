@@ -3,4 +3,4 @@ dist/
 *.tsbuildinfo
 .ledger/.cache/
 packages/vscode/ledger.vsix
-packages/action/grammars/
+!packages/action/dist/
