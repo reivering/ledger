@@ -20,6 +20,9 @@ const ENV_ASSIGN =
 const QUOTED_ASSIGN =
   /\b(\w*(?:[a-z0-9]_?key|secret|passw(?:or)?d|token)["']?\s*[=:]\s*)(?!["']\[REDACTED:)("[^"\n]{4,}"|'[^'\n]{4,}')/gi;
 
+// scheme://user:password@host — keep user and host (useful context), drop the password.
+const URL_CREDENTIALS = /\b([a-z][a-z0-9+.-]*:\/\/[^\s:/@'"`]+:)(?!\[REDACTED:)([^\s@/'"`]+)(?=@)/gi;
+
 const ENV_FILE = /(^|\/)\.env(\..*)?$/;
 export const isEnvFile = (path: string): boolean => ENV_FILE.test(path);
 
@@ -27,6 +30,7 @@ export const isEnvFile = (path: string): boolean => ENV_FILE.test(path);
 export function redact(text: string, custom: CustomPattern[] = []): string {
   let out = text;
   for (const [type, re] of KNOWN) out = out.replace(re, `[REDACTED:${type}]`);
+  out = out.replace(URL_CREDENTIALS, (_, prefix: string) => `${prefix}[REDACTED:url_password]`);
   for (const { name, pattern } of custom) out = out.replace(new RegExp(pattern, 'g'), `[REDACTED:${name}]`);
   out = out.replace(ENV_ASSIGN, (_, k: string) => `${k}[REDACTED:generic_secret]`);
   return out.replace(QUOTED_ASSIGN, (_, k: string) => `${k}[REDACTED:generic_secret]`);

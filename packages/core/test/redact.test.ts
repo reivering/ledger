@@ -35,6 +35,11 @@ describe('redact', () => {
     expect(redact('const key = getKey();')).toBe('const key = getKey();');
   });
 
+  it('connection-string passwords, keeping user and host', () => {
+    expect(redact(j('const url = "postgres://app:', 'S3cret!@db.internal:5432/pay";'))).toBe('const url = "postgres://app:[REDACTED:url_password]@db.internal:5432/pay";');
+    expect(redact('see https://example.com/a:b and mailto:x@y.z')).toBe('see https://example.com/a:b and mailto:x@y.z');
+  });
+
   it('does not double-redact', () => {
     expect(redact(j('AWS_ACCESS_KEY_ID=AKIA', 'IOSFODNN7EXAMPLE'))).toBe('AWS_ACCESS_KEY_ID=[REDACTED:aws_key]');
   });
