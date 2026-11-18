@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSy
 import { join } from 'node:path';
 import YAML from 'yaml';
 import { z } from 'zod';
-import { getRecord, openIndex, related, type Hit, unknownCitations } from './db.js';
+import { getRecord, openIndex, related, stripCitations, type Hit, unknownCitations } from './db.js';
 import { git } from './git.js';
 import { BIN_NAME, LEDGER_DIR, PRODUCT_NAME } from './product.js';
 import { generate, getProvider, type Provider } from './providers.js';
@@ -147,12 +147,8 @@ async function generateBatch(
   });
   const known = new Set(records.slice(0, 30).map((h) => h.id));
   const schema = z.object(Object.fromEntries(keys.map((k) => [k, z.string().min(1)
-    .refine((v) => CITED.test(v), 'must cite a record id like [chg_…] or a file path in backticks')
-    .superRefine((v, ctx) => {
-      const bad = unknownCitations(v, known);
-      if (bad.length) ctx.addIssue({ code: 'custom', message: `cites ids that are not in the records: ${bad.join(', ')}` });
-    })])));
-  const out = await generate(provider ?? getProvider(cfg), {
+    .refine((v) => CITED.test(v), 'must cite a record id like [chg_…] or a file path in backticks')])));
+  const prompt = {
     system: `You are ${PRODUCT_NAME}, writing living documentation for one code module, for engineers about to change it.
 Respond with ONLY a JSON object whose keys are exactly the requested keys; each value is markdown (no headings),
 written as short bullet points, one claim per bullet, each ending with its citation.
@@ -172,8 +168,15 @@ Secrets were replaced with [REDACTED:<type>]; never guess them.`,
       ...(recs.length ? recs : ['none']),
       '', '## Requested keys', JSON.stringify(keys),
     ].join('\n'),
-  }, schema);
-  return out as Record<string, string>;
+  };
+  const ask = async (extra = '') =>
+    (await generate(provider ?? getProvider(cfg), { ...prompt, user: prompt.user + extra }, schema)) as Record<string, string>;
+  const badIn = (o: Record<string, string>): string[] => [...new Set(Object.values(o).flatMap((v) => unknownCitations(v, known)))];
+  // Same policy as `why`: one retry naming the hallucinated ids, then strip any that remain.
+  let out = await ask();
+  if (badIn(out).length) out = await ask(`\n\n## Your previous answer cited ids that are not in the records: ${badIn(out).join(', ')}\nCite only ids shown above.`);
+  const bad = badIn(out);
+  return bad.length ? Object.fromEntries(Object.entries(out).map(([k, v]) => [k, stripCitations(v, bad)])) : out;
 }
 
 type Rec = Hit & { body: string };

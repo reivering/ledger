@@ -92,3 +92,19 @@ it('docs build asks for module sections and file blocks in batches of 4 files', 
   ]);
 });
 
+it('docs: a hallucinated record id gets one retry, then is stripped instead of failing the build', async () => {
+  const r = await resolvedRepo();
+  let calls = 0;
+  const liar: Provider = async (p) => {
+    calls++;
+    const o = JSON.parse(await fakeProvider('chore')(p)) as Record<string, string>;
+    if (o.pitfalls) o.pitfalls = '- Refresh stampede [chg_01ZZZZZZZZZZZZZZZZZZZZZZZZ] in `src/auth.ts`.';
+    return JSON.stringify(o);
+  };
+  const doc = await buildDoc(r.dir, 'src', { provider: liar });
+  expect(calls).toBe(3); // module batch + its retry + the file batch
+  const text = readFileSync(join(r.dir, doc.path), 'utf8');
+  expect(text).toContain('- Refresh stampede  in `src/auth.ts`.');
+  expect(text).not.toContain('chg_01ZZZZ');
+});
+
