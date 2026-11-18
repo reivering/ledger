@@ -98,3 +98,26 @@ it('refuses to clobber a foreign hook', () => {
   expect(() => ledger('hook', 'install')).toThrow(/refusing to overwrite/);
   expect(readFileSync(join(repo.dir, '.git/hooks/post-commit'), 'utf8')).toBe('#!/bin/sh\necho mine\n');
 });
+
+it('issue new → fix commit → why/search/show (--json), with --no-ai and the fake provider', () => {
+  ledger('init');
+  const cfg = join(repo.dir, '.ledger/config.yaml');
+  writeFileSync(cfg, readFileSync(cfg, 'utf8').replace(/^provider: \w+/m, 'provider: fake'));
+  repo.commit('init');
+  expect(ledger('issue', 'new', '--title', 'Login times out', '--symptom', 'Stampede on refresh', '--severity', 'high')).toMatch(/^#1 {2}iss_/);
+  repo.write('src/auth.ts', 'export function refreshToken() {\n  return 1;\n}\n');
+  repo.commit('fix #1: add refresh');
+  expect(ledger('record')).toContain('(linked #1)');
+
+  const human = ledger('why', 'src/auth.ts#refreshToken');
+  expect(human).toMatch(/^⚠ This code was involved in #1 \(open\): Login times out\n/);
+  expect(human).toContain('Fake answer based on [iss_');
+  const j = JSON.parse(ledger('why', 'src/auth.ts#refreshToken', '--json', '--no-ai'));
+  expect(j.anchored).toHaveLength(1);
+  expect(j.answer).toBeUndefined();
+
+  expect(JSON.parse(ledger('search', 'stampede', '--json'))[0].external_id).toBe('#1');
+  expect(ledger('show', '1')).toContain('## Symptom\nStampede on refresh');
+  expect(ledger('issue', 'close', '#1', '--commit', 'HEAD')).toMatch(/^resolved #1/);
+  expect(ledger('why', 'src/auth.ts', '--no-ai')).toMatch(/^⚠ This code was involved in #1 \(resolved \d{4}-\d\d-\d\d\)/);
+});
