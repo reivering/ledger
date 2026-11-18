@@ -22,6 +22,7 @@ export const ConfigSchema = z.strictObject({
   model: z.string().min(1),
   base_url: z.url().optional(),
   max_diff_chars: z.number().int().positive().default(60_000),
+  timeout_seconds: z.number().int().positive().default(300), // per AI request; long reasoning models may need more
   categories: z.array(z.string().min(1)).min(1).default(DEFAULT_CATEGORIES),
   redaction: z
     .strictObject({
@@ -183,6 +184,7 @@ provider: anthropic          # anthropic | openai | ollama | fake
 model: claude-sonnet-4-5     # model id for the provider above
 # base_url: https://...      # optional: self-hosted / gateway endpoint for the provider
 max_diff_chars: 60000        # larger diffs are truncated; per-file summaries are always kept
+# timeout_seconds: 300       # per AI request; raise for slow reasoning models
 categories: [${DEFAULT_CATEGORIES.join(', ')}]
 redaction:
   patterns: []               # extra secrets, e.g. [{ name: acme_id, pattern: "ACME-[0-9]{8}" }]

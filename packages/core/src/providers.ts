@@ -18,12 +18,12 @@ function apiKey(name: string): string {
   return v;
 }
 
-async function post(url: string, headers: Record<string, string>, body: unknown): Promise<unknown> {
+async function post(url: string, headers: Record<string, string>, body: unknown, timeoutMs = 300_000): Promise<unknown> {
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'content-type': 'application/json', ...headers },
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(300_000),
+    signal: AbortSignal.timeout(timeoutMs),
   });
   if (!res.ok) throw new Error(`${new URL(url).host} responded ${res.status}: ${(await res.text()).slice(0, 500)}`);
   return res.json();
@@ -62,6 +62,7 @@ const OPENAI = 'https://api.openai.com/v1';
 // New providers (Bedrock, Azure OpenAI, Vertex): add a case here and to ConfigSchema.provider.
 export function getProvider(cfg: Config): Provider {
   const { model, base_url: base } = cfg;
+  const ms = cfg.timeout_seconds * 1000;
   switch (cfg.provider) {
     case 'anthropic':
       return async ({ system, user }) => {
@@ -69,6 +70,7 @@ export function getProvider(cfg: Config): Provider {
           `${base ?? 'https://api.anthropic.com'}/v1/messages`,
           { 'x-api-key': apiKey('ANTHROPIC'), 'anthropic-version': '2023-06-01' },
           { model, max_tokens: 4096, system, messages: [{ role: 'user', content: user }] },
+          ms,
         )) as { content: { text?: string }[]; stop_reason?: string };
         if (j.stop_reason === 'max_tokens') throw new Error(`${model} hit its output token limit; the answer was cut off`);
         return j.content.map((b) => b.text ?? '').join('');
@@ -83,6 +85,7 @@ export function getProvider(cfg: Config): Provider {
             ...(json && { response_format: { type: 'json_object' } }),
             messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
           },
+          ms,
         )) as { choices: { message: { content: string }; finish_reason?: string }[] };
         if (j.choices[0]?.finish_reason === 'length') throw new Error(`${model} hit its output token limit; the answer was cut off`);
         return j.choices[0]?.message.content ?? '';
@@ -94,7 +97,7 @@ export function getProvider(cfg: Config): Provider {
           stream: false,
           ...(json && { format: 'json' }),
           messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
-        })) as { message: { content: string } };
+        }, ms)) as { message: { content: string } };
         return j.message.content;
       };
     case 'fake':
