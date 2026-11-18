@@ -37,6 +37,17 @@ export const ConfigSchema = z.strictObject({
       model: z.string().optional(),
     })
     .default({ semantic: false }),
+  docs: z
+    .strictObject({
+      // module name -> folder(s). Without an entry, `docs build <folder>` treats the folder as the module.
+      modules: z.record(z.string().regex(/^[\w.-]+$/), z.union([z.string(), z.array(z.string()).min(1)])).default({}),
+    })
+    .default({ modules: {} }),
+  check: z
+    .strictObject({
+      pre_push_fail_on: z.enum(['low', 'medium', 'high', 'critical']).optional(), // unset = pre-push only warns
+    })
+    .default({}),
 });
 export type Config = z.infer<typeof ConfigSchema>;
 
@@ -171,6 +182,10 @@ max_diff_chars: 60000        # larger diffs are truncated; per-file summaries ar
 categories: [${DEFAULT_CATEGORIES.join(', ')}]
 redaction:
   patterns: []               # extra secrets, e.g. [{ name: acme_id, pattern: "ACME-[0-9]{8}" }]
+# docs:
+#   modules: { auth: src/auth, payments: [src/payments, src/billing] }   # default: module = folder
+# check:
+#   pre_push_fail_on: high     # block pushes on findings >= this; unset = warn only
 search:
   semantic: false            # true = also embed records (openai or ollama) for semantic search
   # provider: ollama

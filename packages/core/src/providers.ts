@@ -37,6 +37,11 @@ export const fakeProvider =
       const ids = [...new Set(user.match(/\b(?:chg|iss)_[0-9A-Z]{26}\b/g) ?? [])];
       return `Fake answer based on ${ids.map((i) => `[${i}]`).join(', ') || 'no records'}.`;
     }
+    const requested = /## Requested keys\n(\[.*\])/.exec(user)?.[1];
+    if (requested) {
+      const keys = JSON.parse(requested) as string[];
+      return JSON.stringify(Object.fromEntries(keys.map((k) => [k, `Fake ${k} text, see \`${k.startsWith('file:') ? k.slice(5) : 'src/'}\`.`])));
+    }
     return JSON.stringify({
       title: (/## Commit message\n(.*)/.exec(user)?.[1]?.trim() || 'Untitled change').slice(0, 100),
       category,
