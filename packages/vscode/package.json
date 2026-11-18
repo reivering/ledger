@@ -1,0 +1,128 @@
+{
+  "name": "ledger-vscode",
+  "displayName": "Ledger",
+  "description": "Engineering memory in the editor: why code is the way it is, and warnings before a past bug repeats.",
+  "version": "0.1.0",
+  "publisher": "ledger",
+  "private": true,
+  "type": "module",
+  "license": "UNLICENSED",
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./dist/extension.cjs",
+  "activationEvents": [
+    "workspaceContains:.ledger/config.yaml"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "ledger.why",
+        "title": "Why is this code like this?",
+        "category": "Ledger"
+      },
+      {
+        "command": "ledger.search",
+        "title": "Search",
+        "category": "Ledger"
+      },
+      {
+        "command": "ledger.recordLastCommit",
+        "title": "Record last commit",
+        "category": "Ledger"
+      },
+      {
+        "command": "ledger.openRecord",
+        "title": "Open record",
+        "category": "Ledger"
+      },
+      {
+        "command": "ledger.reindex",
+        "title": "Reindex",
+        "category": "Ledger"
+      },
+      {
+        "command": "ledger.restartEngine",
+        "title": "Restart engine",
+        "category": "Ledger"
+      },
+      {
+        "command": "ledger.filter",
+        "title": "Filter timeline",
+        "category": "Ledger",
+        "icon": "$(filter)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "ledger.filter",
+          "when": "view == ledger.timeline",
+          "group": "navigation"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "ledger.filter",
+          "when": "false"
+        }
+      ]
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "ledger",
+          "title": "Ledger",
+          "icon": "media/ledger.svg"
+        }
+      ]
+    },
+    "views": {
+      "ledger": [
+        {
+          "id": "ledger.timeline",
+          "name": "Timeline"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Ledger",
+      "properties": {
+        "ledger.codeLens.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show change/bug counts above functions and classes."
+        },
+        "ledger.hover.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show recent records and linked bugs on hover."
+        },
+        "ledger.warnings.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Warn when editing code linked to a resolved bug."
+        },
+        "ledger.path": {
+          "type": "string",
+          "default": "ledger",
+          "description": "Path to the `ledger` binary (a .js file runs under `node`)."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json && esbuild src/extension.ts --bundle --platform=node --format=cjs --target=node20 --external:vscode --outfile=dist/extension.cjs"
+  },
+  "dependencies": {
+    "@ledger/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/vscode": "~1.95.0",
+    "@vscode/test-electron": "^3.1.0",
+    "@vscode/vsce": "^4.1.1"
+  }
+}
