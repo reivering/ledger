@@ -30,17 +30,26 @@ export const ConfigSchema = z.strictObject({
         .default([]),
     })
     .default({ patterns: [] }),
+  search: z
+    .strictObject({
+      semantic: z.boolean().default(false),
+      provider: z.enum(['openai', 'ollama', 'fake']).optional(), // embeddings; defaults to `provider`
+      model: z.string().optional(),
+    })
+    .default({ semantic: false }),
 });
 export type Config = z.infer<typeof ConfigSchema>;
 
 const isoDate = z.iso.datetime({ offset: true });
+const sha = z.string().regex(/^[0-9a-f]{7,40}$/);
 const ULID = '[0-9A-HJKMNP-TV-Z]{26}';
 
 export const ChangeRecordSchema = z.strictObject({
   id: z.string().regex(new RegExp(`^chg_${ULID}$`)),
   type: z.literal('change'),
+  // issue ids once linked, raw refs ("#142") until an issue record exists
   title: z.string().min(1),
-  commit: z.string().regex(/^[0-9a-f]{7,40}$/),
+  commit: sha,
   author: z.string(),
   date: isoDate,
   category: z.string().min(1),
@@ -53,17 +62,26 @@ export const ChangeRecordSchema = z.strictObject({
 });
 export type ChangeRecord = z.infer<typeof ChangeRecordSchema>;
 
-// Written by humans for now; importer lands with issue import.
+export const ISSUE_STATUS = ['open', 'resolved', 'wontfix'] as const;
+export const SEVERITY = ['low', 'medium', 'high', 'critical'] as const;
+
 export const IssueRecordSchema = z.strictObject({
   id: z.string().regex(new RegExp(`^iss_${ULID}$`)),
   type: z.literal('issue'),
   title: z.string().min(1),
   date: isoDate,
-  status: z.enum(['open', 'mitigated', 'resolved']),
-  fix_commits: z.array(z.string().regex(/^[0-9a-f]{7,40}$/)),
+  status: z.enum(ISSUE_STATUS),
+  severity: z.enum(SEVERITY),
+  source: z.string().regex(/^[a-z]+$/), // local | github | ...
+  external_id: z.string().min(1), // the ref commits use: "#142", "PROJ-142"
+  resolved_at: isoDate.optional(),
+  labels: z.array(z.string()).default([]),
+  fix_commits: z.array(sha),
   files: z.array(z.string()),
-  issues: z.array(z.string()).default([]),
+  symbols: z.array(z.string()),
+  related_changes: z.array(z.string().regex(new RegExp(`^chg_${ULID}$`))),
 });
+export type IssueRecord = z.infer<typeof IssueRecordSchema>;
 
 export const RecordSchema = z.discriminatedUnion('type', [ChangeRecordSchema, IssueRecordSchema]);
 export type LedgerRecord = z.infer<typeof RecordSchema>;
@@ -117,6 +135,25 @@ export function readRecords(root: string): { records: StoredRecord[]; errors: st
   return { records, errors };
 }
 
+export function writeRecord(path: string, front: LedgerRecord, body: string): void {
+  writeFileSync(path, serializeRecord(RecordSchema.parse(front), body));
+}
+
+export function readRecord(path: string): StoredRecord & { body: string } {
+  return { path, ...parseRecord(readFileSync(path, 'utf8')) };
+}
+
+/** Resolves an id, an issue's external ref ("#142", "PROJ-7"), or a bare issue number. */
+export function findRecord<T extends StoredRecord>(records: T[], ref: string): T | undefined {
+  const want = /^\d+$/.test(ref) ? `#${ref}` : ref;
+  return records.find((r) => r.front.id === ref || (r.front.type === 'issue' && r.front.external_id === want));
+}
+
+export const nowIso = (): string => new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
+
+export const slugify = (s: string): string =>
+  s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60).replace(/-+$/, '') || 'untitled';
+
 export function loadConfig(root: string): Config {
   const path = join(root, LEDGER_DIR, 'config.yaml');
   if (!existsSync(path)) throw new Error(`no ${LEDGER_DIR}/config.yaml — run \`${BIN_NAME} init\``);
@@ -134,6 +171,10 @@ max_diff_chars: 60000        # larger diffs are truncated; per-file summaries ar
 categories: [${DEFAULT_CATEGORIES.join(', ')}]
 redaction:
   patterns: []               # extra secrets, e.g. [{ name: acme_id, pattern: "ACME-[0-9]{8}" }]
+search:
+  semantic: false            # true = also embed records (openai or ollama) for semantic search
+  # provider: ollama
+  # model: nomic-embed-text
 `;
 
 const README_TEMPLATE = `# ${LEDGER_DIR}/ — engineering memory
@@ -145,6 +186,7 @@ audited with the code. Nothing here is stored anywhere else.
 - \`changes/\` — one Markdown record per recorded commit (what changed, why, impact, testing).
 - \`issues/\` — incident / bug records: symptom, root cause, fix commits, affected files.
 - \`docs/\` — longer-lived notes.
+- \`state/\` — importer sync cursors (e.g. last GitHub sync), committed so the team shares them.
 - \`config.yaml\` — AI provider, model, redaction patterns, categories. No secrets.
 
 Records are plain Markdown with YAML front-matter. Edit them freely in a PR; set
@@ -158,7 +200,7 @@ Secrets are redacted before any text is sent to the configured AI provider.
 export function init(root: string): string[] {
   const created: string[] = [];
   const base = join(root, LEDGER_DIR);
-  for (const sub of ['changes', 'issues', 'docs']) {
+  for (const sub of ['changes', 'issues', 'docs', 'state']) {
     const keep = join(base, sub, '.gitkeep');
     if (existsSync(keep)) continue;
     mkdirSync(join(base, sub), { recursive: true });
