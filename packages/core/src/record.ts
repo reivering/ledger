@@ -1,11 +1,15 @@
-import { existsSync, writeFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { z } from 'zod';
 import { collect, type Collected } from './collect.js';
 import { git } from './git.js';
+import { linkIssue } from './issues.js';
 import { LEDGER_DIR, PRODUCT_NAME } from './product.js';
-import { getProvider, type Prompt, type Provider } from './providers.js';
-import { ChangeRecordSchema, loadConfig, readRecords, RISKS, serializeRecord, ulid } from './store.js';
+import { generate, getProvider, type Prompt, type Provider } from './providers.js';
+import { redact } from './redact.js';
+import { anchorSymbols } from './symbols.js';
+import { syncIndex } from './db.js';
+import { type ChangeRecord, findRecord, loadConfig, readRecords, RISKS, slugify, ulid, writeRecord } from './store.js';
 
 const writerSchema = (categories: string[]) =>
   z.object({
@@ -19,7 +23,7 @@ const writerSchema = (categories: string[]) =>
     testing: z.string().min(1),
   });
 
-export function buildPrompt(c: Collected, categories: string[]): Prompt {
+export function buildPrompt(c: Collected, categories: string[], issueTitles: Map<string, string> = new Map()): Prompt {
   const system = `You are ${PRODUCT_NAME}, writing an audit-ready engineering record of ONE code change.
 Respond with ONLY a JSON object, no prose or code fences, with exactly these keys:
 - "title": imperative summary, max 100 chars
@@ -27,14 +31,15 @@ Respond with ONLY a JSON object, no prose or code fences, with exactly these key
 - "risk": "low" | "medium" | "high" (consider security, data, money movement, auth, blast radius)
 - "symbols": functions/classes/methods touched, exactly as named in the diff (e.g. "AuthClient.request")
 - "what_changed": markdown
-- "why": markdown, grounded in the commit message and code; write "Not stated." rather than inventing intent
+- "why": markdown, grounded in the commit message, linked issues and code; write "Not stated." rather than inventing intent
 - "impact": markdown blast radius: callers, data, security and compliance-relevant effects
 - "testing": markdown: tests added/changed, or what should be tested
 Secrets were replaced with [REDACTED:<type>] before you saw this; never guess them.`;
   const files = c.files.map((f) => `${f.path} (${f.added === null ? 'binary' : `+${f.added} -${f.deleted}`})`);
+  const refs = c.issues.map((r) => (issueTitles.has(r) ? `${r} (${issueTitles.get(r)})` : r));
   const user = [
     `Commit: ${c.sha}${c.parents.length > 1 ? ` (merge; diff is against first parent ${c.parents[0]})` : ''}`,
-    `Issue refs: ${c.issues.join(', ') || 'none'}`,
+    `Issue refs: ${refs.join(', ') || 'none'}`,
     '',
     '## Commit message',
     c.message.trim(),
@@ -46,34 +51,8 @@ Secrets were replaced with [REDACTED:<type>] before you saw this; never guess th
     c.diff.trimEnd(),
     ...(c.notes.length ? ['', '## Truncated', ...c.notes] : []),
   ].join('\n');
-  return { system, user };
+  return { system, user, json: true };
 }
-
-function extractJson(text: string): unknown {
-  const start = text.indexOf('{');
-  const end = text.lastIndexOf('}');
-  if (start < 0 || end < start) throw new Error('no JSON object in response');
-  return JSON.parse(text.slice(start, end + 1));
-}
-
-/** Writer: asks for structured JSON, validates, retries once with the validation error. */
-async function generate<S extends z.ZodType>(provider: Provider, prompt: Prompt, schema: S): Promise<z.infer<S>> {
-  let user = prompt.user;
-  let error = '';
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const raw = await provider({ system: prompt.system, user });
-    try {
-      return schema.parse(extractJson(raw));
-    } catch (e) {
-      error = e instanceof z.ZodError ? z.prettifyError(e) : (e as Error).message;
-      user = `${prompt.user}\n\n## Your previous response was invalid\n${error}\nReturn ONLY the corrected JSON object.`;
-    }
-  }
-  throw new Error(`provider returned invalid output twice:\n${error}`);
-}
-
-const slugify = (s: string): string =>
-  s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60).replace(/-+$/, '') || 'change';
 
 export interface RecordOptions {
   rev?: string;
@@ -83,15 +62,16 @@ export interface RecordOptions {
 }
 
 export type RecordResult =
-  | { status: 'written'; path: string }
+  | { status: 'written'; path: string; linked: string[] }
   | { status: 'skipped'; reason: string }
   | { status: 'dry-run'; provider: string; model: string; prompt: Prompt };
 
 export async function recordCommit(root: string, opts: RecordOptions = {}): Promise<RecordResult> {
   const cfg = loadConfig(root);
   const sha = git(root, ['rev-parse', '--verify', `${opts.rev ?? 'HEAD'}^{commit}`]).trim();
-  // ponytail: scans every record per run; use the M2 index once records number in the thousands.
-  const existing = readRecords(root).records.find((r) => r.front.type === 'change' && sha.startsWith(r.front.commit));
+  // ponytail: scans every record per run; fine to thousands, use the index past that.
+  const { records } = readRecords(root);
+  const existing = records.find((r) => r.front.type === 'change' && sha.startsWith(r.front.commit));
   if (existing && !opts.force && !opts.dryRun) {
     return { status: 'skipped', reason: `already recorded in ${relative(root, existing.path)} (--force to regenerate)` };
   }
@@ -100,12 +80,19 @@ export async function recordCommit(root: string, opts: RecordOptions = {}): Prom
   // Also stops hook feedback loops: a commit of only records has no files outside .ledger/.
   if (c.files.length === 0) return { status: 'skipped', reason: `no file changes outside ${LEDGER_DIR}/` };
 
-  const prompt = buildPrompt(c, cfg.categories);
+  const issues = new Map(c.issues.map((ref) => [ref, findRecord(records, ref)] as const));
+  const titles = new Map([...issues].flatMap(([ref, r]) => (r ? [[ref, redact(r.front.title, cfg.redaction.patterns)]] : [])));
+  const prompt = buildPrompt(c, cfg.categories, titles);
   if (opts.dryRun) return { status: 'dry-run', provider: cfg.provider, model: cfg.model, prompt };
 
   const out = await generate(opts.provider ?? getProvider(cfg), prompt, writerSchema(cfg.categories));
+  // Verifier: parsed symbols win; for unsupported languages keep AI symbols that appear in the diff.
+  const parsed = await anchorSymbols(root, c);
+  const symbols = parsed.length
+    ? parsed
+    : [...new Set(out.symbols)].filter((s) => c.fullDiff.includes(s.split('.').pop() ?? s));
 
-  const front = ChangeRecordSchema.parse({
+  const front: ChangeRecord = {
     id: existing?.front.id ?? `chg_${ulid()}`,
     type: 'change',
     title: out.title,
@@ -114,13 +101,12 @@ export async function recordCommit(root: string, opts: RecordOptions = {}): Prom
     date: c.date,
     category: out.category,
     risk: out.risk,
-    issues: c.issues,
+    issues: [...issues].map(([ref, r]) => r?.front.id ?? ref),
     files: c.files.map((f) => f.path),
-    // Verifier: keep only symbols that actually appear in the diff.
-    symbols: [...new Set(out.symbols)].filter((s) => c.fullDiff.includes(s.split('.').pop() ?? s)),
+    symbols,
     generated_by: { provider: cfg.provider, model: cfg.model },
     reviewed: false,
-  });
+  };
   const body = [
     '## What changed', out.what_changed.trim(), '',
     '## Why', out.why.trim(), '',
@@ -134,6 +120,14 @@ export async function recordCommit(root: string, opts: RecordOptions = {}): Prom
     path = join(root, LEDGER_DIR, 'changes', `${name}.md`);
     if (existsSync(path)) path = join(root, LEDGER_DIR, 'changes', `${name}-${c.short}.md`);
   }
-  writeFileSync(path, serializeRecord(front, body));
-  return { status: 'written', path };
+  writeRecord(path, front, body);
+
+  const linked: string[] = [];
+  for (const issue of issues.values()) {
+    if (!issue || issue.front.type !== 'issue') continue;
+    linkIssue(issue.path, { commit: c.short, changeId: front.id, files: front.files, symbols });
+    linked.push(issue.front.external_id);
+  }
+  syncIndex(root);
+  return { status: 'written', path, linked };
 }

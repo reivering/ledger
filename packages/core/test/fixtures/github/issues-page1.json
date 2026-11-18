@@ -1,0 +1,92 @@
+[
+  {
+    "url": "https://api.github.com/repos/acme/payments/issues/7",
+    "number": 7,
+    "title": "Customers charged twice on retry",
+    "body": "Retries after a gateway timeout create a second charge.\n\nRepro key: REDACTED_STRIPE_KEY",
+    "state": "closed",
+    "state_reason": "completed",
+    "labels": [
+      {
+        "id": 100,
+        "name": "bug",
+        "color": "d73a4a"
+      },
+      {
+        "id": 101,
+        "name": "P0",
+        "color": "d73a4a"
+      }
+    ],
+    "user": {
+      "login": "octocat"
+    },
+    "created_at": "2026-09-28T03:00:00Z",
+    "updated_at": "2026-10-01T10:00:00Z",
+    "closed_at": "2026-10-01T09:59:00Z",
+    "comments": 0
+  },
+  {
+    "url": "https://api.github.com/repos/acme/payments/issues/8",
+    "number": 8,
+    "title": "Refund webhook retries forever",
+    "body": "Webhook handler never acks 4xx.",
+    "state": "open",
+    "state_reason": null,
+    "labels": [
+      {
+        "id": 100,
+        "name": "bug",
+        "color": "d73a4a"
+      }
+    ],
+    "user": {
+      "login": "octocat"
+    },
+    "created_at": "2026-09-29T03:00:00Z",
+    "updated_at": "2026-10-02T08:00:00Z",
+    "closed_at": null,
+    "comments": 0
+  },
+  {
+    "url": "https://api.github.com/repos/acme/payments/issues/9",
+    "number": 9,
+    "title": "Support Bitcoin",
+    "body": "Feature request.",
+    "state": "closed",
+    "state_reason": "not_planned",
+    "labels": [
+      {
+        "id": 100,
+        "name": "enhancement",
+        "color": "d73a4a"
+      }
+    ],
+    "user": {
+      "login": "octocat"
+    },
+    "created_at": "2026-09-30T03:00:00Z",
+    "updated_at": "2026-10-02T09:00:00Z",
+    "closed_at": "2026-10-02T09:00:00Z",
+    "comments": 0
+  },
+  {
+    "url": "https://api.github.com/repos/acme/payments/issues/10",
+    "number": 10,
+    "title": "Add retry tests",
+    "body": "PR body",
+    "state": "open",
+    "state_reason": null,
+    "labels": [],
+    "user": {
+      "login": "octocat"
+    },
+    "created_at": "2026-09-30T03:00:00Z",
+    "updated_at": "2026-10-01T00:00:00Z",
+    "closed_at": null,
+    "comments": 0,
+    "pull_request": {
+      "url": "https://api.github.com/repos/acme/payments/pulls/10"
+    }
+  }
+]

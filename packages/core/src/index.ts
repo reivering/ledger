@@ -6,6 +6,9 @@ export * from './collect.js';
 export * from './providers.js';
 export * from './record.js';
 export * from './hooks.js';
+export * from './symbols.js';
+export * from './issues.js';
+export * from './db.js';
 
 /** License hook. Milestone 3: verify the offline Ed25519-signed license file here; throw to refuse. */
 export function checkLicense(): void {

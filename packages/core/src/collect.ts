@@ -1,6 +1,7 @@
 import { git } from './git.js';
 import { LEDGER_DIR } from './product.js';
 import { isEnvFile, redact, type CustomPattern } from './redact.js';
+import { changedLines } from './symbols.js';
 
 export interface FileStat {
   path: string;
@@ -14,7 +15,9 @@ export interface Collected {
   author: string;
   date: string;
   parents: string[];
+  base: string; // first parent, or the empty tree for root commits
   message: string; // redacted
+  lines: { path: string; added: number[]; removed: number[] }[]; // from the raw diff, for symbol anchoring
   issues: string[];
   files: FileStat[];
   diff: string; // redacted + truncated: what the provider sees
@@ -96,20 +99,22 @@ export function collect(root: string, sha: string, opts: { maxChars: number; pat
     .split(/^(?=diff --git )/m)
     .filter(Boolean)
     .map((text, i) => ({ path: files[i]?.path ?? '', text }))
-    .filter((c) => !isOurs(c.path))
-    .map(({ path, text }) => {
+    .filter((c) => !isOurs(c.path));
+  // Line numbers come from the raw diff: redaction can collapse multi-line secrets.
+  const lines = chunks.filter((c) => !isEnvFile(c.path)).map((c) => ({ path: c.path, ...changedLines(c.text) }));
+  const redacted = chunks.map(({ path, text }) => {
       if (isEnvFile(path)) text = `${text.split(/^(?=@@ )/m)[0] ?? ''}[REDACTED:env_file]\n`;
       return { path, text: redact(text, opts.patterns) };
     });
-  const { diff, notes } = truncate(chunks, opts.maxChars);
+  const { diff, notes } = truncate(redacted, opts.maxChars);
 
   return {
-    sha: full, short, author, date, parents,
+    sha: full, short, author, date, parents, base, lines,
     message: redact(message, opts.patterns),
     issues: issueRefs(message),
     files: files.filter((f) => !isOurs(f.path)),
     diff,
-    fullDiff: chunks.map((c) => c.text).join(''),
+    fullDiff: redacted.map((c) => c.text).join(''),
     notes,
   };
 }
