@@ -314,9 +314,36 @@ export async function explain(ix: Index, cfg: Config, r: WhyResult, provider?: P
     return `### [${h.id}] ${h.type === 'issue' ? `issue ${h.external_id} (${h.status}, ${h.severity})` : `change ${h.commit} (${h.category}, risk ${h.risk})`} ${h.date.slice(0, 10)}\n${h.title}\n${body.slice(0, 2000)}`;
   });
   const target = `${r.target.path}${r.target.symbol ? `#${r.target.symbol}` : ''}`;
-  return (provider ?? getProvider(cfg))({
-    system: `You are ${PRODUCT_NAME}. Answer "why is this code the way it is?" for an engineer about to change it, using ONLY the records given.
+  const known = new Set(records.map((h) => h.id));
+  const ask = (extra = '') =>
+    (provider ?? getProvider(cfg))({
+      system: `You are ${PRODUCT_NAME}. Answer "why is this code the way it is?" for an engineer about to change it, using ONLY the records given.
 Be concise (under 200 words). Cite every claim with record ids in square brackets, e.g. [chg_...]. Lead with any past bugs/incidents and what must not regress. If the records don't explain something, say so.`,
-    user: redact(`Target: ${target}\n\n${blocks.join('\n\n')}`, cfg.redaction.patterns),
-  });
+      user: redact(`Target: ${target}\n\n${blocks.join('\n\n')}${extra}`, cfg.redaction.patterns),
+    });
+  let answer = await ask();
+  let bad = unknownCitations(answer, known);
+  if (bad.length) {
+    answer = await ask(`\n\n## Your previous answer cited ids that are not in the records above: ${bad.join(', ')}\nAnswer again, citing only the ids shown.`);
+    bad = unknownCitations(answer, known);
+  }
+  return bad.length ? stripCitations(answer, bad) : answer;
 }
+
+/** Record ids cited in `[...]` that are malformed or not among `known` (model hallucinations). */
+export function unknownCitations(text: string, known: Set<string>): string[] {
+  const bad = new Set<string>();
+  for (const m of text.matchAll(/\[([^\]\n]*\b(?:chg|iss)_[^\]\n]*)\]/g)) {
+    for (const tok of (m[1] ?? '').split(/[\s,;]+/)) {
+      if (/^(?:chg|iss)_/.test(tok) && !known.has(tok)) bad.add(tok);
+    }
+  }
+  return [...bad];
+}
+
+/** Removes bad ids from citation brackets; drops brackets left empty. */
+export const stripCitations = (text: string, bad: string[]): string =>
+  text.replace(/\[([^\]\n]*\b(?:chg|iss)_[^\]\n]*)\]/g, (_, inner: string) => {
+    const keep = inner.split(/\s*[,;]\s*|\s+/).filter((t) => t && !bad.includes(t));
+    return keep.length ? `[${keep.join(', ')}]` : '';
+  });

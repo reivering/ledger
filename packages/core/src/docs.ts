@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSy
 import { join } from 'node:path';
 import YAML from 'yaml';
 import { z } from 'zod';
-import { getRecord, openIndex, related, type Hit } from './db.js';
+import { getRecord, openIndex, related, type Hit, unknownCitations } from './db.js';
 import { git } from './git.js';
 import { BIN_NAME, LEDGER_DIR, PRODUCT_NAME } from './product.js';
 import { generate, getProvider, type Provider } from './providers.js';
@@ -132,10 +132,17 @@ async function generateBlocks(
     const tag = h.type === 'issue' ? `issue ${h.external_id} (${h.status}, ${h.severity})` : `change ${h.commit} (${h.category}, risk ${h.risk})`;
     return `### [${h.id}] ${tag} ${h.date.slice(0, 10)} — ${r(h.title)}\n${r(body)}`;
   });
-  const schema = z.object(Object.fromEntries(keys.map((k) => [k, z.string().min(1).refine((v) => CITED.test(v), 'must cite a record id like [chg_…] or a file path in backticks')])));
+  const known = new Set(records.slice(0, 30).map((h) => h.id));
+  const schema = z.object(Object.fromEntries(keys.map((k) => [k, z.string().min(1)
+    .refine((v) => CITED.test(v), 'must cite a record id like [chg_…] or a file path in backticks')
+    .superRefine((v, ctx) => {
+      const bad = unknownCitations(v, known);
+      if (bad.length) ctx.addIssue({ code: 'custom', message: `cites ids that are not in the records: ${bad.join(', ')}` });
+    })])));
   const out = await generate(provider ?? getProvider(cfg), {
     system: `You are ${PRODUCT_NAME}, writing living documentation for one code module, for engineers about to change it.
-Respond with ONLY a JSON object whose keys are exactly the requested keys; each value is markdown (no headings).
+Respond with ONLY a JSON object whose keys are exactly the requested keys; each value is markdown (no headings),
+written as short bullet points, one claim per bullet, each ending with its citation.
 - "overview": what the module does and how its parts fit together
 - "decisions": key design decisions and why, from the records
 - "pitfalls": known bugs, incidents and traps; name the symbols involved

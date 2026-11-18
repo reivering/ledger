@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   closeIssue, explain, getRecord, githubSource, importIssues, issueWarning, loadConfig, openIndex, readRecords,
-  resolveTarget, search, why, type IssueRecord, type ChangeRecord,
+  resolveTarget, search, why, type IssueRecord, type ChangeRecord, type Provider,
 } from '../src/index.js';
 import { seededRepo, tempRepo } from './fixture.js';
 
@@ -55,6 +55,13 @@ describe('index + queries', () => {
 
     const answer = await explain(ix, loadConfig(r.dir), res);
     expect(answer).toContain(`[${res.issues[0]!.id}]`);
+
+    // Hallucinated ids: one retry with the error, then stripped.
+    const prompts: string[] = [];
+    const liar: Provider = async (p) => (prompts.push(p.user), `Because of [chg_01ZZZZZZZZZZZZZZZZZZZZZZZZ, ${res.issues[0]!.id}] and [chg_chg].`);
+    expect(await explain(ix, loadConfig(r.dir), res, liar)).toBe(`Because of [${res.issues[0]!.id}] and .`);
+    expect(prompts).toHaveLength(2);
+    expect(prompts[1]).toContain('cited ids that are not in the records above: chg_01ZZZZZZZZZZZZZZZZZZZZZZZZ, chg_chg');
     ix.db.close();
   });
 
@@ -110,7 +117,7 @@ describe('github import (recorded fixtures, no network)', () => {
     });
     const source = githubSource('acme/payments', 'test-token');
 
-    expect(await importIssues(r.dir, source)).toEqual({ created: 3, updated: 0 });
+    expect(await importIssues(r.dir, source)).toEqual({ created: 3, updated: 0, renamed: [] });
     const gh7 = issue(r.dir, '#7');
     expect(gh7.front).toMatchObject({ source: 'github', status: 'resolved', severity: 'critical', fix_commits: ['9fceb02d0ae5', expect.stringMatching(/^[0-9a-f]{7,}$/)], labels: ['bug', 'P0'] });
     expect((gh7.front as IssueRecord).related_changes).toHaveLength(1); // linked to the earlier change
@@ -125,10 +132,24 @@ describe('github import (recorded fixtures, no network)', () => {
     // Hand-edit, then an incremental sync that re-titles #8 (and re-sends unchanged #9).
     writeFileSync(gh7.path, readFileSync(gh7.path, 'utf8').replace('## Root cause\n', '## Root cause\nLocal analysis kept.\n'));
     const before = readdirSync(join(r.dir, '.ledger/issues')).length;
-    expect(await importIssues(r.dir, source)).toEqual({ created: 0, updated: 1 });
+    expect(await importIssues(r.dir, source)).toEqual({ created: 0, updated: 1, renamed: [] });
     expect(urls.filter((u) => u.includes('since='))).toEqual([expect.stringContaining('since=2026-10-02T09%3A00%3A00Z')]);
     expect(issue(r.dir, '#8').front.title).toBe('Refund webhook retries forever (renamed)');
     expect(readFileSync(gh7.path, 'utf8')).toContain('Local analysis kept.');
     expect(readdirSync(join(r.dir, '.ledger/issues'))).toHaveLength(before);
   });
 });
+
+it('a GitHub issue with the same number as a local one moves the local issue to LOCAL-N', async () => {
+  const r = (repo = await seededRepo()); // local #1, linked to the "fix #1" change
+  const localId = issue(r.dir).front.id;
+  const gh = { number: 1, title: 'Upstream bug', body: '', state: 'open', labels: [], created_at: '2026-10-01T00:00:00Z', updated_at: '2026-10-01T00:00:00Z', closed_at: null };
+  vi.stubGlobal('fetch', async () => new Response(JSON.stringify([gh]), { status: 200 }));
+  const { importIssues: imp, newIssue } = await import('../src/index.js');
+  expect(await imp(r.dir, githubSource('acme/x', 't'))).toEqual({ created: 1, updated: 0, renamed: ['#1 → LOCAL-2'] });
+  const all = recs(r.dir).filter((x) => x.front.type === 'issue').map((x) => [x.front.id === localId ? 'local' : 'github', (x.front as IssueRecord).external_id]);
+  expect(all.sort()).toEqual([['github', '#1'], ['local', 'LOCAL-2']]);
+  expect((changeFor(r.dir, r.fixSha).front as ChangeRecord).issues).toEqual([localId]); // link survives the rename
+  expect((newIssue(r.dir, { title: 'Next' }).front as IssueRecord).external_id).toBe('LOCAL-3');
+});
+
