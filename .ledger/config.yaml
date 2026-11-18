@@ -1,0 +1,13 @@
+# Ledger configuration. Committed with the repo — never put API keys here.
+# Keys come only from the environment: LEDGER_ANTHROPIC_API_KEY, LEDGER_OPENAI_API_KEY.
+provider: openai               # K2 Horizon (IFM, OpenAI-compatible API)
+model: IFM/K2-Horizon-375B-A23B
+base_url: https://api.ifm.ai/v1    # IFM direct; the local 8787 proxy is equivalent
+max_diff_chars: 60000        # larger diffs are truncated; per-file summaries are always kept
+categories: [feature, bugfix, refactor, security, config, docs, chore]
+redaction:
+  patterns: []               # extra secrets, e.g. [{ name: acme_id, pattern: "ACME-[0-9]{8}" }]
+search:
+  semantic: false            # true = also embed records (openai or ollama) for semantic search
+  # provider: ollama
+  # model: nomic-embed-text
