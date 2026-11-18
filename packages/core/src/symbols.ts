@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Language, Parser, type Node } from 'web-tree-sitter';
@@ -77,6 +78,33 @@ export async function enclosingSymbols(path: string, source: string, lines: numb
   tree?.delete();
   parser.delete();
   return [...found];
+}
+
+export interface SymbolRange {
+  name: string; // qualified, same scheme as enclosingSymbols
+  line: number; // 1-based
+  endLine: number;
+  hash: string; // content hash of the declaration's source text
+}
+
+export const contentHash = (text: string): string => createHash('sha256').update(text).digest('hex').slice(0, 16);
+
+/** Every declaration in a file with its line range and content hash. null = language unsupported. */
+export async function listSymbols(path: string, source: string): Promise<SymbolRange[] | null> {
+  const parser = await parserFor(path);
+  if (!parser) return null;
+  const out: SymbolRange[] = [];
+  const tree = source.length > MAX_SOURCE ? null : parser.parse(source);
+  const walk = (n: Node, prefix: string[]): void => {
+    const name = declName(n);
+    const names = name ? [...prefix, name] : prefix;
+    if (name) out.push({ name: names.join('.'), line: n.startPosition.row + 1, endLine: n.endPosition.row + 1, hash: contentHash(n.text) });
+    for (const c of n.namedChildren) if (c) walk(c, names);
+  };
+  if (tree) walk(tree.rootNode, []);
+  tree?.delete();
+  parser.delete();
+  return out;
 }
 
 /** New-side (added) and old-side (removed) line numbers touched by one file's unified diff. */

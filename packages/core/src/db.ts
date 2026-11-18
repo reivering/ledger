@@ -186,7 +186,7 @@ export interface WhyResult {
   target: WhyTarget;
   anchored: Hit[]; // changes anchored to the symbol
   file_level: Hit[]; // other changes touching the file
-  issues: Hit[]; // linked issues: show these prominently
+  issues: Hit[]; // linked issues (to the symbol, if one is given): show these prominently
 }
 
 const symbolMatches = (want: string) => (s: string): boolean =>
@@ -198,7 +198,11 @@ export function why(ix: Index, t: WhyTarget): WhyResult {
   const anchored = t.symbol ? changes.filter((h) => h.symbols.some(symbolMatches(t.symbol ?? ''))).map((h) => ({ ...h, match: 'symbol' as const })) : [];
   const ids = new Set(anchored.map((h) => h.id));
   const fileLevel = changes.filter((h) => !ids.has(h.id)).map((h) => ({ ...h, match: 'file' as const }));
-  return { target: t, anchored, file_level: fileLevel, issues: linkedIssues(ix, hits) };
+  // A bug in one function must not warn on its neighbours: with a symbol, only issues anchored to it count.
+  const issueHits = t.symbol
+    ? [...anchored, ...hits.filter((h) => h.type === 'issue' && h.symbols.some(symbolMatches(t.symbol ?? '')))]
+    : hits;
+  return { target: t, anchored, file_level: fileLevel, issues: linkedIssues(ix, issueHits) };
 }
 
 /** Past changes and bugs touching any of these files (for agents, before editing). */
