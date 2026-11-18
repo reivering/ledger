@@ -1,0 +1,12 @@
+{
+  "name": "@ledger/action",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json && esbuild src/main.ts --bundle --platform=node --format=esm --target=node22 --outfile=dist/index.js --banner:js=\"import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);\" && node -e \"const fs=require('node:fs');fs.cpSync('../core/grammars','grammars',{recursive:true});fs.copyFileSync(require.resolve('web-tree-sitter/web-tree-sitter.wasm',{paths:['../core']}),'dist/web-tree-sitter.wasm')\""
+  },
+  "dependencies": {
+    "@ledger/core": "workspace:*"
+  }
+}

@@ -1,0 +1,12 @@
+name: Ledger check
+description: Warns on pull requests that touch code linked to past bugs, high-risk changes or stale docs. Reads only .ledger/ and the PR diff; no AI calls.
+inputs:
+  github-token:
+    description: Token used to post the summary comment
+    default: ${{ github.token }}
+  fail-on:
+    description: Fail the job on findings at or above this severity (info|low|medium|high|critical). Unset = never fail.
+    required: false
+runs:
+  using: node24
+  main: dist/index.js
