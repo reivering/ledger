@@ -9,7 +9,7 @@ import { generate, getProvider, type Provider } from './providers.js';
 import { redact } from './redact.js';
 import {
   findRecord, type IssueRecord, ISSUE_STATUS, loadConfig, nowIso, readRecord, readRecords, SEVERITY,
-  slugify, type StoredRecord, ulid, writeRecord,
+  slugify, type StoredRecord, stripHeading, ulid, writeRecord,
 } from './store.js';
 import { anchorSymbols } from './symbols.js';
 
@@ -23,6 +23,7 @@ const addSha = (list: string[], sha?: string): string[] =>
 
 export function setSection(body: string, heading: string, text: string): string {
   const re = new RegExp(`(^## ${heading}\\n)[\\s\\S]*?(?=^## |(?![\\s\\S]))`, 'm');
+  text = stripHeading(heading, text);
   return re.test(body) ? body.replace(re, (_, h: string) => `${h}${text.trim()}\n\n`) : `${body.trimEnd()}\n\n## ${heading}\n${text.trim()}\n`;
 }
 

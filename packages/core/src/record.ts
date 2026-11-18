@@ -9,7 +9,7 @@ import { generate, getProvider, type Prompt, type Provider } from './providers.j
 import { redact } from './redact.js';
 import { anchorSymbols } from './symbols.js';
 import { syncIndex } from './db.js';
-import { type ChangeRecord, findRecord, loadConfig, readRecords, RISKS, slugify, ulid, writeRecord } from './store.js';
+import { type ChangeRecord, findRecord, stripHeading, loadConfig, readRecords, RISKS, slugify, ulid, writeRecord } from './store.js';
 
 const writerSchema = (categories: string[]) =>
   z.object({
@@ -108,10 +108,10 @@ export async function recordCommit(root: string, opts: RecordOptions = {}): Prom
     reviewed: false,
   };
   const body = [
-    '## What changed', out.what_changed.trim(), '',
-    '## Why', out.why.trim(), '',
-    '## Impact / blast radius', out.impact.trim(), '',
-    '## Testing notes', out.testing.trim(),
+    '## What changed', stripHeading('What changed', out.what_changed), '',
+    '## Why', stripHeading('Why', out.why), '',
+    '## Impact / blast radius', stripHeading('Impact / blast radius', out.impact), '',
+    '## Testing notes', stripHeading('Testing notes', out.testing),
   ].join('\n');
 
   let path = existing?.path;

@@ -71,6 +71,14 @@ describe('record', () => {
     fetchSpy.mockRestore();
   });
 
+  it('drops a section heading the model repeated inside the section text', async () => {
+    repo.write('h.txt', 'h\n');
+    repo.commit('Add h');
+    const dup: Provider = async (p) => JSON.stringify({ ...JSON.parse(await fakeProvider('chore')(p)), what_changed: '## What changed\n\nAdded h.' });
+    const r = await recordCommit(repo.dir, { provider: dup });
+    expect(readFileSync((r as { path: string }).path, 'utf8')).toContain('## What changed\nAdded h.\n\n## Why');
+  });
+
   it('retries once on invalid output, then fails', async () => {
     repo.write('a.txt', 'a\n');
     repo.commit('Add a');

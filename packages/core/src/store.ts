@@ -160,6 +160,10 @@ export function findRecord<T extends StoredRecord>(records: T[], ref: string): T
   return records.find((r) => r.front.id === ref || (r.front.type === 'issue' && r.front.external_id === want));
 }
 
+/** Models sometimes repeat the section heading inside the section's text; drop it so it isn't doubled. */
+export const stripHeading = (heading: string, text: string): string =>
+  text.trim().replace(new RegExp(`^#{1,6}\\s*${heading.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')}\\s*\\n+`, 'i'), '');
+
 export const nowIso = (): string => new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
 
 export const slugify = (s: string): string =>
