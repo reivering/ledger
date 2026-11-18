@@ -5,18 +5,20 @@ import { createInterface } from 'node:readline/promises';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import {
-  BIN_NAME, checkLicense, closeIssue, explain, getRecord, githubRepoFromRemote, githubSource, type Hit, importIssues,
-  init, installHooks, issueWarning, loadConfig, newIssue, openIndex, PRODUCT_NAME, readRecords, recordCommit, reindex,
-  repoRoot, resolveTarget, search, SEVERITY, uninstallHooks, why,
+  BIN_NAME, buildDoc, check, checkLicense, closeIssue, docsStatus, FINDING_SEVERITY, type FindingSeverity, getRecordQuery,
+  githubRepoFromRemote, githubSource, type Hit, importIssues, init, installHooks, loadConfig, newIssue, PRE_PUSH_BLOCK_EXIT,
+  PRODUCT_NAME, readRecords, recordCommit, reindex, repoRoot, searchQuery, SEVERITY, severityRank, uninstallHooks, updateDoc,
+  whyQuery,
 } from '@ledger/core';
 import { serve } from '@ledger/mcp';
+import { serveStdio } from './serve.js';
 
 const HELP = `${PRODUCT_NAME} — local-first engineering memory
 
 Usage:
   ${BIN_NAME} init                         create .ledger/ in this repo (idempotent)
   ${BIN_NAME} record [<commit>]            document a commit (default HEAD) [--dry-run] [--force]
-  ${BIN_NAME} hook install|uninstall       post-commit/post-merge hooks (background, never block git)
+  ${BIN_NAME} hook install [--pre-push] | uninstall   git hooks (never block git unless configured)
   ${BIN_NAME} list [-n 20]                 recent records
 
   ${BIN_NAME} issue new [--title T --symptom S --severity low|medium|high|critical]
@@ -26,8 +28,12 @@ Usage:
   ${BIN_NAME} why <path>[:<line>|#<symbol>] [--no-ai]  timeline + linked bugs + AI answer
   ${BIN_NAME} search "<query>" [-n 10]     ranked full-text (+ semantic if enabled)
   ${BIN_NAME} show <id|#n>                 print one record
+  ${BIN_NAME} check [--staged | --diff <file> | --range <a>..<b>] [--fail-on high|critical]
+                                         past bugs / high-risk changes / stale docs in changed code
+  ${BIN_NAME} docs build [module] | status | update <module>   living module docs
   ${BIN_NAME} reindex                      rebuild .ledger/.cache/index.db from .ledger/
   ${BIN_NAME} mcp [--root <repo>]          stdio MCP server (read-only tools)
+  ${BIN_NAME} serve --stdio                JSON-RPC engine for editors (LSP-style framing)
 
   Query commands accept --json.`;
 
@@ -59,6 +65,12 @@ async function main(argv: string[]): Promise<void> {
       commit: { type: 'string' },
       repo: { type: 'string' },
       root: { type: 'string' },
+      staged: { type: 'boolean' },
+      diff: { type: 'string' },
+      range: { type: 'string' },
+      'fail-on': { type: 'string' },
+      'pre-push': { type: 'boolean' },
+      stdio: { type: 'boolean' },
       help: { type: 'boolean', short: 'h' },
     },
   });
@@ -70,11 +82,6 @@ async function main(argv: string[]): Promise<void> {
   const rel = (p: string): string => relative(root, p);
   const limit = (d: number): number => Number(v.limit) || d;
   const out = (data: unknown, human: () => void): void => (v.json ? console.log(JSON.stringify(data, null, 2)) : human());
-  const index = () => {
-    const ix = openIndex(root);
-    for (const e of ix.errors) console.error(`invalid record: ${e}`);
-    return ix;
-  };
 
   switch (cmd) {
     case 'init': {
@@ -94,12 +101,12 @@ async function main(argv: string[]): Promise<void> {
     }
     case 'hook': {
       if (arg === 'install') {
-        const paths = installHooks(root, [process.execPath, fileURLToPath(import.meta.url)]);
+        const paths = installHooks(root, [process.execPath, fileURLToPath(import.meta.url)], { prePush: v['pre-push'] });
         console.log(`installed:\n  ${paths.map(rel).join('\n  ')}`);
       } else if (arg === 'uninstall') {
         const paths = uninstallHooks(root);
         console.log(paths.length ? `removed:\n  ${paths.map(rel).join('\n  ')}` : 'no hooks installed');
-      } else throw new Error(`usage: ${BIN_NAME} hook install|uninstall`);
+      } else throw new Error(`usage: ${BIN_NAME} hook install [--pre-push] | uninstall`);
       return;
     }
     case 'list': {
@@ -149,62 +156,77 @@ async function main(argv: string[]): Promise<void> {
     }
     case 'why': {
       if (!arg) throw new Error(`usage: ${BIN_NAME} why <path>[:<line>|#<symbol>]`);
-      const ix = index();
-      try {
-        const r = why(ix, await resolveTarget(root, process.cwd(), arg));
-        const warnings = r.issues.map(issueWarning);
-        let answer: string | undefined;
-        let aiError: string | undefined;
-        if (!v['no-ai'] && (r.anchored.length || r.file_level.length)) {
-          try {
-            answer = await explain(ix, loadConfig(root), r);
-          } catch (e) {
-            aiError = (e as Error).message;
-          }
-        }
-        out({ ...r, warnings, ...(answer && { answer }), ...(aiError && { ai_error: aiError }) }, () => {
-          const t = r.target;
-          const label = `${t.path}${t.symbol ? `#${t.symbol}` : ''}${t.line && !t.symbol ? `:${t.line}` : ''}`;
-          for (const w of warnings) console.log(w);
-          if (warnings.length) console.log('');
-          if (!r.anchored.length && !r.file_level.length) return console.log(`No records touch ${label} yet.`);
-          console.log(`${label}: ${t.symbol ? `${r.anchored.length} anchored to the symbol, ` : ''}${r.file_level.length} file-level`);
-          for (const h of r.anchored) console.log(`  ${row(h)}  [symbol]`);
-          for (const h of r.file_level) console.log(`  ${row(h)}`);
-          if (answer) console.log(`\n${answer.trim()}`);
-          if (aiError) console.error(`\n(AI answer unavailable: ${aiError}. Use --no-ai for the timeline only.)`);
-        });
-      } finally {
-        ix.db.close();
-      }
+      const r = await whyQuery(root, process.cwd(), arg, { ai: !v['no-ai'] });
+      out(r, () => {
+        const t = r.target;
+        const label = `${t.path}${t.symbol ? `#${t.symbol}` : ''}${t.line && !t.symbol ? `:${t.line}` : ''}`;
+        for (const w of r.warnings) console.log(w);
+        if (r.warnings.length) console.log('');
+        if (!r.anchored.length && !r.file_level.length) return console.log(`No records touch ${label} yet.`);
+        console.log(`${label}: ${t.symbol ? `${r.anchored.length} anchored to the symbol, ` : ''}${r.file_level.length} file-level`);
+        for (const h of r.anchored) console.log(`  ${row(h)}  [symbol]`);
+        for (const h of r.file_level) console.log(`  ${row(h)}`);
+        if (r.answer) console.log(`\n${r.answer.trim()}`);
+        if (r.ai_error) console.error(`\n(AI answer unavailable: ${r.ai_error}. Use --no-ai for the timeline only.)`);
+      });
       return;
     }
     case 'search': {
       if (!arg) throw new Error(`usage: ${BIN_NAME} search "<query>"`);
-      const ix = index();
-      try {
-        const r = await search(ix, loadConfig(root), arg, limit(10));
-        for (const w of r.warnings) console.error(w);
-        out(r.hits, () => {
-          if (!r.hits.length) return console.log('no matches');
-          for (const h of r.hits) console.log(`${row(h)}\n    ${h.path}${h.snippet ? `\n    ${h.snippet.replace(/\s+/g, ' ')}` : ''}`);
-        });
-      } finally {
-        ix.db.close();
-      }
+      const r = await searchQuery(root, arg, limit(10));
+      for (const w of r.warnings) console.error(w);
+      out(r.hits, () => {
+        if (!r.hits.length) return console.log('no matches');
+        for (const h of r.hits) console.log(`${row(h)}\n    ${h.path}${h.snippet ? `\n    ${h.snippet.replace(/\s+/g, ' ')}` : ''}`);
+      });
       return;
     }
     case 'show': {
       if (!arg) throw new Error(`usage: ${BIN_NAME} show <id|#n>`);
-      const ix = index();
-      const r = getRecord(ix, arg);
-      ix.db.close();
+      const r = await getRecordQuery(root, arg);
       if (!r) throw new Error(`no record ${arg}`);
       out(r, () => process.stdout.write(readFileSync(join(root, r.path), 'utf8')));
       return;
     }
+    case 'check': {
+      const threshold = v['pre-push'] ? loadConfig(root).check.pre_push_fail_on : v['fail-on'];
+      if (threshold && !(FINDING_SEVERITY as readonly string[]).includes(threshold)) throw new Error(`--fail-on must be one of ${FINDING_SEVERITY.join(', ')}`);
+      const findings = await check(root, { staged: v.staged, range: v.range, diff: v.diff && readFileSync(v.diff, 'utf8') });
+      out(findings, () => {
+        if (!findings.length) return console.log(`${BIN_NAME} check: no past bugs, high-risk changes or stale docs in the changed code`);
+        for (const f of findings) console.log(`${f.severity.toUpperCase().padEnd(8)} ${f.message}${f.records.length ? `  [${f.records.join(', ')}]` : ''}`);
+      });
+      if (threshold && findings.some((f) => severityRank(f.severity) >= severityRank(threshold as FindingSeverity))) {
+        process.exitCode = v['pre-push'] ? PRE_PUSH_BLOCK_EXIT : 1;
+      }
+      return;
+    }
+    case 'docs': {
+      if (arg === 'status') {
+        const s = await docsStatus(root);
+        out(s, () => {
+          if (!s.length) return console.log(`no docs yet — run \`${BIN_NAME} docs build <module>\``);
+          for (const d of s) {
+            console.log(`${d.stale ? 'STALE' : 'ok   '}  ${d.module}  ${d.path}`);
+            for (const c of d.changes) console.log(`         ${c.file}#${c.symbol} ${c.change}`);
+          }
+        });
+      } else if (arg === 'build') {
+        const mods = arg2 ? [arg2] : Object.keys(loadConfig(root).docs.modules);
+        if (!mods.length) throw new Error(`usage: ${BIN_NAME} docs build <module|folder> (or configure docs.modules)`);
+        for (const m of mods) console.log((await buildDoc(root, m)).path);
+      } else if (arg === 'update') {
+        if (!arg2) throw new Error(`usage: ${BIN_NAME} docs update <module>`);
+        const r = await updateDoc(root, arg2);
+        console.log(r.regenerated.length ? `${r.path}: regenerated ${r.regenerated.join(', ')}` : `${r.path}: up to date`);
+      } else throw new Error(`usage: ${BIN_NAME} docs build [module] | status | update <module>`);
+      return;
+    }
     case 'mcp':
       return serve(root);
+    case 'serve':
+      if (!v.stdio) throw new Error(`usage: ${BIN_NAME} serve --stdio`);
+      return serveStdio(root);
     default:
       throw new Error(`unknown command "${cmd}"\n\n${HELP}`);
   }

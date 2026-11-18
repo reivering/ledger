@@ -1,8 +1,9 @@
-import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
+import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, expect, it } from 'vitest';
+import { connect } from '../../core/src/rpc.js';
 import { env, tempRepo } from '../../core/test/fixture.js';
 
 const CLI = fileURLToPath(new URL('../dist/index.js', import.meta.url));
@@ -120,4 +121,63 @@ it('issue new → fix commit → why/search/show (--json), with --no-ai and the 
   expect(ledger('show', '1')).toContain('## Symptom\nStampede on refresh');
   expect(ledger('issue', 'close', '#1', '--commit', 'HEAD')).toMatch(/^resolved #1/);
   expect(ledger('why', 'src/auth.ts', '--no-ai')).toMatch(/^⚠ This code was involved in #1 \(resolved \d{4}-\d\d-\d\d\)/);
+});
+
+it('check --fail-on sets the exit code; the pre-push hook warns, and blocks only when configured', () => {
+  ledger('init');
+  const cfg = join(repo.dir, '.ledger/config.yaml');
+  writeFileSync(cfg, readFileSync(cfg, 'utf8').replace(/^provider: \w+/m, 'provider: fake'));
+  repo.commit('init');
+  ledger('issue', 'new', '--title', 'Refresh stampede', '--severity', 'critical');
+  repo.write('src/auth.ts', 'export function refreshToken() {\n  return 1;\n}\n');
+  repo.commit('fix #1: add refresh');
+  ledger('record');
+  ledger('issue', 'close', '1', '--commit', 'HEAD');
+  repo.commit('records');
+
+  repo.write('src/auth.ts', 'export function refreshToken() {\n  return 2;\n}\n');
+  repo.git('add', '-A');
+  expect(ledger('check', '--staged')).toMatch(/^CRITICAL +src\/auth\.ts#refreshToken previously caused #1/);
+  const failing = spawnSync(process.execPath, [CLI, 'check', '--staged', '--fail-on', 'high'], { cwd: repo.dir, env });
+  expect(failing.status).toBe(1);
+  repo.commit('change refresh');
+
+  const remote = `${repo.dir}-remote.git`;
+  execFileSync('git', ['init', '-q', '--bare', remote], { env });
+  repo.git('remote', 'add', 'origin', remote);
+  ledger('hook', 'install', '--pre-push');
+  repo.git('push', '-q', 'origin', 'main~1:refs/heads/main'); // establish the remote
+  const warned = spawnSync('git', ['push', 'origin', 'main'], { cwd: repo.dir, env, encoding: 'utf8' });
+  expect(warned.status).toBe(0);
+  expect(warned.stderr).toMatch(/CRITICAL +src\/auth\.ts#refreshToken previously caused #1/);
+
+  writeFileSync(cfg, `${readFileSync(cfg, 'utf8')}check:\n  pre_push_fail_on: high\n`);
+  repo.write('src/auth.ts', 'export function refreshToken() {\n  return 3;\n}\n');
+  repo.commit('change refresh again');
+  expect(spawnSync('git', ['push', 'origin', 'main'], { cwd: repo.dir, env }).status).not.toBe(0);
+  rmSync(remote, { recursive: true, force: true });
+});
+
+it('serve --stdio answers JSON-RPC and notifies when .ledger/ changes', async () => {
+  ledger('init');
+  const cfg = join(repo.dir, '.ledger/config.yaml');
+  writeFileSync(cfg, readFileSync(cfg, 'utf8').replace(/^provider: \w+/m, 'provider: fake'));
+  repo.write('src/a.ts', 'export function a() {\n  return 1;\n}\n');
+  repo.commit('Add a');
+  ledger('record');
+  const proc = spawn(process.execPath, [CLI, 'serve', '--stdio'], { cwd: repo.dir, env });
+  const notes: string[] = [];
+  const rpc = connect(proc.stdout, proc.stdin, (m) => notes.push(m));
+  try {
+    expect(await rpc.request('status')).toMatchObject({ records: 1 });
+    const s = await rpc.request<{ symbols: { name: string; changes: number }[] }>('fileSummary', { path: 'src/a.ts' });
+    expect(s.symbols).toEqual([expect.objectContaining({ name: 'a', changes: 1, bugs: 0 })]);
+    await expect(rpc.request('nope')).rejects.toThrow('unknown method nope');
+    ledger('issue', 'new', '--title', 'Something broke');
+    await until(() => notes.includes('ledger/indexChanged'));
+    expect(notes).toContain('ledger/indexChanged');
+    expect(await rpc.request('status')).toMatchObject({ records: 2 });
+  } finally {
+    proc.kill();
+  }
 });
