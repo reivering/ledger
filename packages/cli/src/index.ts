@@ -145,6 +145,7 @@ async function main(argv: string[]): Promise<void> {
       } else if (arg === 'import' && arg2 === 'github') {
         const r = await importIssues(root, githubSource(v.repo ?? githubRepoFromRemote(root)));
         console.log(`github: ${r.created} created, ${r.updated} updated`);
+        for (const x of r.renamed) console.log(`local issue renamed to avoid a clash with GitHub: ${x}`);
       } else throw new Error(`usage: ${BIN_NAME} issue new|close|import github`);
       return;
     }

@@ -54,10 +54,21 @@ function linkChange(change: StoredRecord, issue: IssueRecord): void {
   if (issues.join() !== front.issues.join()) writeRecord(change.path, { ...front, issues }, body);
 }
 
-function nextLocalNumber(records: StoredRecord[]): number {
-  // ponytail: numbers are unique per checkout; two branches can both mint #N. Rename on merge if it happens.
-  const nums = records.flatMap((r) => (r.front.type === 'issue' ? [Number(/^#(\d+)$/.exec(r.front.external_id)?.[1] ?? 0)] : []));
-  return Math.max(0, ...nums) + 1;
+/**
+ * Next local issue ref. `#N` collides with tracker numbers, so repos with a GitHub remote or imported
+ * issues get `LOCAL-N` (still matched by commit refs like "fix LOCAL-3"). Plain repos keep `#N`.
+ */
+function nextLocalRef(root: string, records: StoredRecord[], forceTracked = false): string {
+  // ponytail: numbers are unique per checkout; two branches can both mint the same ref. Rename on merge if it happens.
+  const local = records.filter((r) => r.front.type === 'issue' && r.front.source === 'local');
+  const n = Math.max(0, ...local.map((r) => Number(/^(?:#|LOCAL-)(\d+)$/.exec(r.front.type === 'issue' ? r.front.external_id : '')?.[1] ?? 0))) + 1;
+  let tracked = forceTracked || records.some((r) => r.front.type === 'issue' && r.front.source !== 'local');
+  try {
+    tracked ||= Boolean(githubRepoFromRemote(root));
+  } catch {
+    // no GitHub origin
+  }
+  return tracked ? `LOCAL-${n}` : `#${n}`;
 }
 
 export function newIssue(root: string, o: { title: string; symptom?: string; severity?: Severity }): StoredRecord {
@@ -71,7 +82,7 @@ export function newIssue(root: string, o: { title: string; symptom?: string; sev
     status: 'open',
     severity: o.severity ?? 'medium',
     source: 'local',
-    external_id: `#${nextLocalNumber(records)}`,
+    external_id: nextLocalRef(root, records),
     labels: [],
     fix_commits: [],
     files: [],
@@ -150,13 +161,14 @@ function severityFromLabels(labels: string[]): Severity {
 }
 
 /** Incremental and additive: updates tracker-owned fields, never deletes records or local edits to the body. */
-export async function importIssues(root: string, source: IssueSource): Promise<{ created: number; updated: number }> {
+export async function importIssues(root: string, source: IssueSource): Promise<{ created: number; updated: number; renamed: string[] }> {
   const cfg = loadConfig(root);
   const statePath = join(root, LEDGER_DIR, 'state', `${source.name}.json`);
   const state = existsSync(statePath) ? (JSON.parse(readFileSync(statePath, 'utf8')) as { last_sync?: string }) : {};
   const { records } = readRecords(root);
   let created = 0;
   let updated = 0;
+  const renamed: string[] = [];
   let lastSync = state.last_sync;
 
   for await (const i of source.pull(state.last_sync)) {
@@ -178,6 +190,15 @@ export async function importIssues(root: string, source: IssueSource): Promise<{
       }
       rec = { path: existing.path, front: next };
     } else {
+      // A local issue already uses this ref (created before the repo was tracked): move it to LOCAL-N.
+      const clash = records.find((r) => r.front.type === 'issue' && r.front.source === 'local' && r.front.external_id === i.external_id);
+      if (clash) {
+        const { front, body } = readRecord(clash.path);
+        const ref = nextLocalRef(root, records, true);
+        if (front.type === 'issue') writeRecord(clash.path, { ...front, external_id: ref }, body);
+        clash.front = { ...clash.front, external_id: ref } as IssueRecord;
+        renamed.push(`${i.external_id} → ${ref}`);
+      }
       const front: IssueRecord = {
         id: `iss_${ulid()}`,
         type: 'issue',
@@ -207,7 +228,7 @@ export async function importIssues(root: string, source: IssueSource): Promise<{
   }
   if (lastSync) writeFileSync(statePath, `${JSON.stringify({ last_sync: lastSync }, null, 2)}\n`);
   syncIndex(root);
-  return { created, updated };
+  return { created, updated, renamed };
 }
 
 interface GhIssue {
