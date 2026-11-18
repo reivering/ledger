@@ -114,7 +114,20 @@ function recentBlock(records: Hit[]): string {
   return lines.join('\n') || '_No records touch this module yet._';
 }
 
+const FILES_PER_CALL = 4;
+
+/** One call per batch (module sections, then files 4 at a time) keeps each JSON answer inside the model's output limit. */
 async function generateBlocks(
+  root: string, cfg: Config, mod: Module, files: string[], anchors: Map<string, Anchor[]>, records: Rec[], keys: string[], provider?: Provider,
+): Promise<Record<string, string>> {
+  const fileKeys = keys.filter((k) => k.startsWith('file:'));
+  const batches = [keys.filter((k) => !k.startsWith('file:')), ...Array.from({ length: Math.ceil(fileKeys.length / FILES_PER_CALL) }, (_, i) => fileKeys.slice(i * FILES_PER_CALL, (i + 1) * FILES_PER_CALL))];
+  const out: Record<string, string> = {};
+  for (const batch of batches.filter((b) => b.length)) Object.assign(out, await generateBatch(root, cfg, mod, files, anchors, records, batch, provider));
+  return out;
+}
+
+async function generateBatch(
   root: string, cfg: Config, mod: Module, files: string[], anchors: Map<string, Anchor[]>, records: Rec[], keys: string[], provider?: Provider,
 ): Promise<Record<string, string>> {
   const r = (s: string): string => redact(s, cfg.redaction.patterns);

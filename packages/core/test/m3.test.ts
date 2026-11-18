@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { buildDoc, check, closeIssue, docsStatus, fileSummary, updateDoc, whyQuery } from '../src/index.js';
+import { buildDoc, check, closeIssue, docsStatus, fakeProvider, fileSummary, type Provider, updateDoc, whyQuery } from '../src/index.js';
 import { AUTH_V2, seededRepo } from './fixture.js';
 
 let repo: Awaited<ReturnType<typeof seededRepo>> | undefined;
@@ -77,3 +77,18 @@ describe('living docs', () => {
     expect(await updateDoc(r.dir, 'src')).toMatchObject({ regenerated: [] });
   });
 });
+
+it('docs build asks for module sections and file blocks in batches of 4 files', async () => {
+  const r = await resolvedRepo();
+  for (const n of ['a', 'b', 'c', 'd', 'e']) r.write(`src/${n}.ts`, `export function ${n}() {\n  return 1;\n}\n`);
+  r.commit('more files');
+  const asked: string[][] = [];
+  const spy: Provider = async (p) => (asked.push(JSON.parse(/## Requested keys\n(\[.*\])/.exec(p.user)![1]!) as string[]), fakeProvider('chore')(p));
+  await buildDoc(r.dir, 'src', { provider: spy });
+  expect(asked).toEqual([
+    ['overview', 'decisions', 'pitfalls'],
+    ['file:src/a.ts', 'file:src/auth.ts', 'file:src/b.ts', 'file:src/c.ts'],
+    ['file:src/d.ts', 'file:src/e.ts'],
+  ]);
+});
+

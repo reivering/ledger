@@ -69,7 +69,8 @@ export function getProvider(cfg: Config): Provider {
           `${base ?? 'https://api.anthropic.com'}/v1/messages`,
           { 'x-api-key': apiKey('ANTHROPIC'), 'anthropic-version': '2023-06-01' },
           { model, max_tokens: 4096, system, messages: [{ role: 'user', content: user }] },
-        )) as { content: { text?: string }[] };
+        )) as { content: { text?: string }[]; stop_reason?: string };
+        if (j.stop_reason === 'max_tokens') throw new Error(`${model} hit its output token limit; the answer was cut off`);
         return j.content.map((b) => b.text ?? '').join('');
       };
     case 'openai':
@@ -82,7 +83,8 @@ export function getProvider(cfg: Config): Provider {
             ...(json && { response_format: { type: 'json_object' } }),
             messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
           },
-        )) as { choices: { message: { content: string } }[] };
+        )) as { choices: { message: { content: string }; finish_reason?: string }[] };
+        if (j.choices[0]?.finish_reason === 'length') throw new Error(`${model} hit its output token limit; the answer was cut off`);
         return j.choices[0]?.message.content ?? '';
       };
     case 'ollama':
