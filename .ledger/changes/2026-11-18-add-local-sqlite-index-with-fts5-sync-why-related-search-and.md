@@ -1,7 +1,7 @@
 ---
 id: chg_01M7Q1T5WDXW6H33ZAA1MBB8JK
 type: change
-title: Add local SQLite index with FTS5, sync, why/related/search and semantic fusion
+title: Add local SQLite index with FTS5 plus why/related/search and semantic fusion
 commit: 13e061f
 author: ikcyrils@gmail.com
 date: 2026-11-18T17:50:54+08:00
@@ -15,33 +15,13 @@ reviewed: false
 ---
 
 ## What changed
-## What changed
-
-New module `packages/core/src/db.ts` implementing a local SQLite index for the `.ledger/` store:
-
-- **Storage**: index lives at `.ledger/.cache/index.db` (WAL mode, 5s busy timeout). Schema version 1; on mismatch, the db/wal/shm files are deleted and rebuilt. `openIndex` creates the cache dir, applies the schema, and **syncs by mtime+size stamp** on open; `reindex` forces a full rebuild and reports record/error counts.
-- **Schema**: `records` (front-matter flattened: type/title/category/risk/status/severity/external_id/date/commit), `record_files` (path `TEXT` including directory prefix), `record_symbols`, `record_issues`, FTS5 virtual table `records_fts` (porter tokenizer, body+title), and `embeddings` (per-model `BLOB` vectors).
-- **Sync semantics**: `sync` stats every `.md` file under `changes/` and `issues/`, skips unchanged mtimes/sizes, removes stale rows (deleted files), and wraps per-file parsing in try/catch — invalid records are reported in `errors` and excluded from the index, and all re-indexing runs in a transaction with rollback on failure.
-- **Queries**: `getRecord`, `recent`, `touching` (file or directory via `substr` prefix), `linkedIssues` (issue records plus issues referenced from changes), `why` (changes anchored to a symbol vs. file-level matches with `match` flags), `related` (changes/issues touching any of a file list, with `matched_files`), and `resolveTarget` (`path`, `path:line` resolving the line to its enclosing symbol via `enclosingSymbols`, `path#symbol`).
-- **Search**: `search` runs FTS5 with BM25 ranking plus snippet generation; when `cfg.search.semantic` is enabled it adds a semantic channel: missing embeddings are computed in batches of 32 via `getEmbedder`, with `redact` applied and input truncated to 8000 chars before provider calls, vectors cached in the `embeddings` table, and results fused by reciprocal-rank (1/(60+rank)) with keyword hits. A provider failure degrades gracefully to keyword results with a warning. Embeddings are redacted before being sent to the provider.
-- **Explain**: `explain` builds a why-answer via `getProvider(cfg)` from issues + anchored + file-level records, redacting the prompt.
+New module `packages/core/src/db.ts` (318 lines) implementing a local SQLite-backed index of `.ledger/` records. Schema v1 (`SCHEMA_VERSION`): a `records` table, `record_files`/`record_symbols`/`record_issues` link tables, an FTS5 virtual table (`records_fts`, porter unicode61) with snippet support, and an `embeddings` table; the schema sets `PRAGMA user_version` to gate rebuilds. `openIndex` creates `.ledger/.cache/index.db`, deletes and recreates it (including `-wal`/`-shm` sidecars) on schema-version mismatch, enables WAL with a 5s busy timeout, then `sync()` upserts records from `.ledger/{changes,issues}` keyed by an `mtimeMs:size` stamp and deletes vanished or invalid ones inside a transaction. Query API: `getRecord`, `recent`, `why` (symbol-anchored vs file-level change hits plus linked issues), `related` (past changes/issues touching given files), `resolveTarget` (`path`, `path:line`, `path#symbol`), `search` (FTS5 BM25 ranking fused via reciprocal-rank with semantic results when `search.semantic` is on; per-model embedding cache, batch 32, redacted before embedding, brute-force cosine in JS), and `explain` (LLM answer citing record ids, records redacted before sending; limited to 15 records, bodies capped at 2000 chars).
 
 ## Why
-From the commit message: the index lives in `.ledger/.cache/index.db`, syncs by mtime+size on open, and rebuilds itself when missing or on schema version change. The search function fuses FTS5 keyword results with semantic embeddings when `search.semantic` is on; the why/related/explain queries give an engineer context about why code is the way it is before changing it. No issue refs or further intent stated in the record.
+Grounded in the commit message only: 'Add local SQLite index with FTS5, why/related/search and semantic fusion. Index lives in .ledger/.cache/index.db, syncs by mtime+size on open and rebuilds itself when missing or on schema version change.' No linked issues. Broader product intent (fast local search over .ledger/ records powering why/related/search commands) is implicit in the added API; not separately stated.
 
 ## Impact / blast radius
-- **Blast radius**: new file only (`packages/core/src/db.ts`, 0 lines removed); no existing modules modified, and nothing in this commit wires it into the CLI, so there are no prior callers to break.
-- **Data effects**: writes a new cache artifact `.ledger/.cache/index.db[-wal,-shm]`; source records in `.ledger/` are only read, never mutated. Corrupt or outdated index files are deleted/rebuilt automatically on version change. A schema version bump requires deleting the old index (documented by `SCHEMA_VERSION`).
-- **Security/compliance**: record content crosses the provider boundary in `semanticSearch` and `explain` only after `redact()` is applied; embedding inputs are truncated to 8000 chars. Provider errors are caught and degrade to keyword-only results. Embeddings for arbitrary provider models are cached, so changing `search.provider`/`search.model` invalidates prior cache entries by storing the model in the row key.
-- **Resource notes** (documented in code): full directory stats per open (~50k record ceiling), brute-force JS cosine over all embeddings per query (switch noted to sqlite-vec past ~100k records).
+Blast radius: new file only (+318/-0); no existing modules or callers changed in this commit. Data/operational: introduces a local SQLite cache at `.ledger/.cache/index.db` holding rendered record contents; bumping `SCHEMA_VERSION` deletes `index.db` plus WAL/SHM sidecars and rebuilds from `.ledger/`; sync stats every record file per open (commented as fine to ~50k records). Security/compliance: record bodies are redacted via `cfg.redaction.patterns` before embedding and before `explain` LLM calls; semantic search depends on an external embedder and degrades to keyword-only results with a warning on failure; `explain` sends up to 15 records (bodies truncated at 2000 chars) to the provider. `resolveTarget` rejects targets outside the repo. The schema-version/delete path is the main data-loss hazard (only the rebuildable cache, not `.ledger/` itself).
 
 ## Testing notes
-No tests were added or changed in this commit. The following should be covered:
-- `openIndex`/`sync` incremental sync: touched file (mtime/size change) re-indexed; unchanged file skipped; deleted file removed from all six tables.
-- Schema-version bump triggers file deletion and clean rebuild; `reindex` returns correct record/error counts.
-- Malformed record file yields an entry in `errors` without aborting sync or partial rows.
-- `why`: anchored vs. file-level classification, `symbolMatches` prefix/suffix/middle matching, linked-issue resolution (including `#NNN` external_id normalization).
-- `resolveTarget`: relative/absolute paths, `path:line`, `path#symbol`, and rejection of paths outside the repo.
-- `search` FTS5 behavior (multi-term OR, empty-query null), top-N trimming, RRF fusion ordering, and the `semantic` off path.
-- `semanticSearch`: batching of pending embeddings, caching (second call issues no provider embed calls), and provider failure appending the warning while returning keyword hits.
-- Redaction applied to embedding and prompt payloads; line-resolution via `enclosingSymbols` for `path:line` targets.
+No tests added in this commit. Should cover: (1) `openIndex` rebuild on missing db and on `SCHEMA_VERSION` bump (sidecar deletion); (2) `sync` insert, update on mtime/size change, and delete for removed/renamed record files, plus error collection for unparseable records; (3) FTS5 search ranking, snippet delimiters, and empty/term-less query returning no FTS rows; (4) semantic fusion: fallback warning when the embedder throws, reciprocal-rank ordering, embedding cache miss then hit, model namespacing; (5) `why` symbol anchoring vs file-level matching via `symbolMatches`, numeric issue refs resolved with `#` prefix, linked-issue collection; (6) `related` dedupe across multiple files with `matched_files` accumulation and date-descending sort; (7) `resolveTarget` parsing of `path`, `path:line` (enclosing symbol via `enclosingSymbols`), `path#symbol`, absolute path handling, and outside-repo rejection; (8) `explain` empty-records short-circuit and redaction of the user payload.
