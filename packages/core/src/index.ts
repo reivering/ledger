@@ -9,8 +9,10 @@ export * from './hooks.js';
 export * from './symbols.js';
 export * from './issues.js';
 export * from './db.js';
+export * from './engine.js';
+export * from './docs.js';
 
-/** License hook. Milestone 3: verify the offline Ed25519-signed license file here; throw to refuse. */
+/** License hook (out of scope through Milestone 3): verify the offline Ed25519-signed license file here; throw to refuse. */
 export function checkLicense(): void {
-  // no-op until Milestone 3
+  // no-op until licensing is built
 }
